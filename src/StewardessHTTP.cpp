@@ -40,377 +40,107 @@ namespace HTTP
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Token Dictionary
 
-
-  void Serializer::serialize( const Stewardess::Payload* p )
+  TokenDictionary::TokenDictionary( char d_k, char d_v ) :
+    _delimKey( d_k ),
+    _delimValue( d_v ),
+    _flagTrailingDelimeterRequired( false ),
+    _dictionary()
   {
-    DEBUG_LOG( "Stewardess::Serializer", "Serializing" );
-
-    Payload* payload = (Payload*)p;
-    std::string request_string;
-    std::string header_string;
-
-    if ( payload->_method == Payload::Response )
-    {
-      request_string  = payload->_version;
-      request_string += ' ';
-      request_string += getStringFromResponse( payload->_response );
-      request_string += (char) 13;
-      request_string += (char) 10;
-    }
-    else // Request
-    {
-      request_string  = MethodStrings[ payload->_method ];
-      request_string += ' ';
-      request_string += payload->_request.encode();
-      request_string += ' ';
-      request_string += payload->_version;
-      request_string += (char) 13;
-      request_string += (char) 10;
-    }
-
-    for ( Payload::HeaderData::const_iterator it = payload->_header.begin(); it != payload->_header.end(); ++it )
-    {
-      header_string += it->first;
-      header_string += ": ";
-      header_string += it->second;
-      header_string += (char) 13;
-      header_string += (char) 10;
-    }
-
-    size_t buffer_size = request_string.size() + header_string.size() + payload->_body.size();
-
-    Buffer* buffer = new Buffer( buffer_size );
-
-    buffer->push( request_string );
-
-    buffer->push( header_string );
-
-    buffer->push( (char) 13 ); // CR
-    buffer->push( (char) 10 ); // LF
-
-    if ( payload->_isFile )
-    {
-      std::ifstream instream( payload->_body, std::ios_base::in );
-      buffer->push( instream );
-    }
-    else
-    {
-      buffer->push( payload->_body );
-    }
-
-    buffer->push( (char) 13 ); // CR
-    buffer->push( (char) 10 ); // LF
-
-    this->pushBuffer( buffer );
   }
 
 
-  void Serializer::deserialize( const Buffer* buffer )
+  void TokenDictionary::decode( const std::string& data )
   {
-    DEBUG_LOG( "Stewardess::Serializer", "Deserializing" );
+    std::string::const_iterator begin = data.begin();
+    this->decode( begin, data.end() );
+  }
 
-    Buffer::Iterator current = buffer->getIterator();
 
-    Payload* payload = new Payload();
+  void TokenDictionary::decode( std::string::const_iterator& it, std::string::const_iterator end )
+  {
+    std::string current_key;
+    std::string current_value;
 
-    std::stringstream request_string;
-    std::string key_string;
-    std::string value_string;
-
-//////////////////// // Load the Request
-    while ( current )
+    while ( it != end )
     {
-      if ( *current == (char)13 )
+      if ( *it == '%' )
       {
-        ++current;
-        if ( *current == (char)10 )
+        ++it;
+        if ( it != end )
         {
-          ++current;
-          break;
+          char temp = *it++;
+          if ( it != end )
+          {
+            current_value.push_back( percentDecode( temp, *it ) );
+          }
+          else break;
         }
-        else
-        {
-          delete payload;
-          payload = nullptr;
-          this->pushError( ErrorMalformedPayload );
-          return;
-        }
+        else break;
+      }
+      else if ( *it == _delimKey )
+      {
+        current_key = current_value;
+        current_value.clear();
+      }
+      else if ( *it == _delimValue )
+      {
+        _dictionary.insert( std::make_pair( current_key, current_value ) );
+        current_key.clear();
+        current_value.clear();
       }
       else
       {
-        request_string << *current;
+        current_value.push_back( *it );
       }
-      ++current;
+      ++it;
     }
 
-    std::string request_token;
-    request_string >> request_token;
+    if ( ! current_key.empty() )
+      _dictionary.insert( std::make_pair( current_key, current_value ) );
+  }
 
-    payload->_method = getMethodFromName( request_token );
-    if ( payload->_method == Payload::Response )
+
+  std::string TokenDictionary::encode() const
+  {
+    std::string result;
+
+    TokenMap::const_iterator it = _dictionary.begin();
+    TokenMap::const_iterator end = _dictionary.end();
+
+    if ( it == end ) return result;
+
+    while( true )
     {
-      // request_token contains the version
-      payload->_version = request_token;
-
-      int response_code;
-      request_string >> response_code;
-      payload->_response = (Payload::ResponseType)response_code;
-    }
-    else
-    {
-      request_string >> payload->_request;
-      request_string >> payload->_version;
-    }
-
-
-//////////////////// // Load the Header
-    while ( current )
-    {
-      bool key = true;
-      while ( current )
+      result += it->first;
+      result += _delimKey;
+      result += it->second;
+      if ( ++it == end )
       {
-        if ( *current == (char)13 )
-        {
-          ++current;
-          if ( current && *current == (char)10 )
-          {
-            payload->addHeader( key_string, value_string );
-            key_string.clear();
-            value_string.clear();
-            ++current;
-            break;
-          }
-          else
-          {
-            delete payload;
-            payload = nullptr;
-            this->pushError( ErrorMalformedPayload );
-            return;
-          }
-        }
-        else
-        {
-          if ( key )
-          {
-            if ( *current == ':' )
-            {
-              ++current; // Expect a space
-              if ( ! current )
-              {
-                delete payload;
-                payload = nullptr;
-                this->pushError( ErrorMalformedPayload );
-                return;
-              }
-              key = false;
-            }
-            else
-            {
-              key_string.push_back( *current );
-            }
-          }
-          else
-            value_string.push_back( *current );
-        }
-        ++current;
+        if ( _flagTrailingDelimeterRequired ) result += _delimValue;
+        break;
       }
-
-      if ( *current == (char)13 )
-      {
-        ++current;
-        if ( current && *current == (char)10 )
-        {
-          ++current;
-          break;
-        }
-        else
-        {
-          delete payload;
-          payload = nullptr;
-          this->pushError( ErrorMalformedPayload );
-          return;
-        }
-      }
+      result += _delimValue;
     }
 
-//////////////////// // Load the Body
-    while ( current )
-    {
-      payload->_body.push_back( *current );
-      ++current;
-    }
-
-    this->pushPayload( payload );
+    return result;
   }
+  
 
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-  Payload::Payload() :
-    _method( Response ),
-    _request(),
-    _version(),
-    _response( Null ),
-    _header(),
-    _isFile( false ),
-    _body()
+  void TokenDictionary::setValue( std::string key, std::string value )
   {
+    _dictionary[key] = value;
   }
 
 
-  Payload::Payload( ResponseType response, std::string bodyText ) :
-    _method( Response ),
-    _request(),
-    _version( VersionString ),
-    _response( response ),
-    _header(),
-    _isFile( false ),
-    _body( bodyText )
+  std::string TokenDictionary::getValue( std::string key ) const
   {
+    TokenMap::const_iterator found = _dictionary.find( key );
+    if ( found == _dictionary.end() ) return std::string();
+    else return found->second;
   }
 
-
-  void Payload::setHeader( std::string key, std::string value )
-  {
-    _header[key] = value;
-  }
-
-
-  void Payload::addHeader( std::string key, std::string value )
-  {
-    HeaderData::iterator found = _header.find( key );
-    if ( found != _header.end() )
-    {
-      found->second += ", ";
-      found->second += value;
-    }
-    else
-    {
-      _header[key] = value;
-    }
-  }
-
-
-  std::string Payload::getHeader( std::string key ) const
-  {
-    HeaderData::const_iterator found = _header.find( key );
-    if ( found == _header.end() )
-    {
-      return std::string("");
-    }
-    else
-    {
-      return found->second;
-    }
-  }
-
-  std::string Payload::print() const
-  {
-    std::stringstream ss;
-    if ( _method == Response )
-    {
-      ss << _version << ' ' << getStringFromResponse( _response ) << '\n';
-    }
-    else
-    {
-      ss << MethodStrings[ _method ] << ' ' << _request << ' ' << VersionString << '\n';
-    }
-    for ( HeaderData::const_iterator it = _header.begin(); it != _header.end(); ++it )
-    {
-      ss << it->first << ": " << it->second << '\n';
-    }
-    ss << '\n';
-    ss << _body;
-
-    return ss.str();
-  }
-
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-  Payload::MethodType getMethodFromName( std::string name  )
-  {
-    for ( size_t i = 0; i < 10; ++i )
-    {
-      if ( name == MethodStrings[i] )
-        return (Payload::MethodType)i;
-    }
-
-    return Payload::Response;
-  }
-
-
-  std::string getStringFromResponse( Payload::ResponseType response )
-  {
-    switch( response )
-    {
-      case Payload::Ok :
-        return std::string( "200 OK" );
-        break;
-
-      case Payload::Created :
-        return std::string( "201 Created" );
-        break;
-
-      case Payload::Accepted :
-        return std::string( "202 Accpeted" );
-        break;
-
-      case Payload::BadRequest :
-        return std::string( "400 Bad Request" );
-        break;
-
-      case Payload::Unauthorized :
-        return std::string( "401 Unauthorized" );
-        break;
-
-      case Payload::PaymentRequired :
-        return std::string( "402 Payment Required" );
-        break;
-
-      case Payload::Forbidden :
-        return std::string( "403 Forbidden" );
-        break;
-
-      case Payload::NotFound :
-        return std::string( "404 Not Found" );
-        break;
-
-      case Payload::MethodNotAllowed :
-        return std::string( "405 Method Not Allowed" );
-        break;
-
-      case Payload::InternalServerError :
-        return std::string( "500 Internal Server Error" );
-        break;
-
-      case Payload::NotImplemented :
-        return std::string( "501 Not Implemented" );
-        break;
-
-      case Payload::BadGateway :
-        return std::string( "502 Bad Gateway" );
-        break;
-
-      case Payload::ServiceUnavailable :
-        return std::string( "503 Service Unavailable" );
-        break;
-
-      case Payload::GatewayTimeout :
-        return std::string( "504 Gateway Timeout" );
-        break;
-
-      case Payload::HTTPVersionNotSupported :
-        return std::string( "505 HTTP Version Not Supported" );
-        break;
-
-      default :
-        return std::string( "500 Internal Server Error" );
-        break;
-    }
-//    return std::string( "200 OK" );
-  }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
   // HTTP Request object
@@ -625,6 +355,418 @@ namespace HTTP
     return os;
   }
 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+  void Serializer::serialize( const Stewardess::Payload* p )
+  {
+    DEBUG_LOG( "Stewardess::Serializer", "Serializing" );
+
+    Payload* payload = (Payload*)p;
+    std::string request_string;
+    std::string header_string;
+
+    if ( payload->_method == Payload::Response )
+    {
+      request_string  = payload->_version;
+      request_string += ' ';
+      request_string += getStringFromResponse( payload->_response );
+      request_string += (char) 13;
+      request_string += (char) 10;
+    }
+    else // Request
+    {
+      request_string  = MethodStrings[ payload->_method ];
+      request_string += ' ';
+      request_string += payload->_request.encode();
+      request_string += ' ';
+      request_string += payload->_version;
+      request_string += (char) 13;
+      request_string += (char) 10;
+    }
+
+    for ( Payload::HeaderData::const_iterator it = payload->_header.begin(); it != payload->_header.end(); ++it )
+    {
+      header_string += it->first;
+      header_string += ": ";
+      header_string += it->second;
+      header_string += (char) 13;
+      header_string += (char) 10;
+    }
+
+    if ( payload->_setCookie.size() )
+    {
+      header_string += "Set-Cookie: ";
+      header_string += payload->_setCookie.encode();
+      header_string += (char) 13;
+      header_string += (char) 10;
+    }
+
+    size_t buffer_size = request_string.size() + header_string.size() + payload->_body.size();
+
+    Buffer* buffer = new Buffer( buffer_size );
+
+    buffer->push( request_string );
+
+    buffer->push( header_string );
+
+    buffer->push( (char) 13 ); // CR
+    buffer->push( (char) 10 ); // LF
+
+    if ( payload->_isFile )
+    {
+      std::ifstream instream( payload->_body, std::ios_base::in );
+      buffer->push( instream );
+    }
+    else
+    {
+      buffer->push( payload->_body );
+    }
+
+    buffer->push( (char) 13 ); // CR
+    buffer->push( (char) 10 ); // LF
+
+    this->pushBuffer( buffer );
+  }
+
+
+  void Serializer::deserialize( const Buffer* buffer )
+  {
+    DEBUG_LOG( "Stewardess::Serializer", "Deserializing" );
+
+    Buffer::Iterator current = buffer->getIterator();
+
+    Payload* payload = new Payload();
+
+    std::stringstream request_string;
+    std::string key_string;
+    std::string value_string;
+
+//////////////////// // Load the Request
+    while ( current )
+    {
+      if ( *current == (char)13 )
+      {
+        ++current;
+        if ( *current == (char)10 )
+        {
+          ++current;
+          break;
+        }
+        else
+        {
+          delete payload;
+          payload = nullptr;
+          this->pushError( ErrorMalformedPayload );
+          return;
+        }
+      }
+      else
+      {
+        request_string << *current;
+      }
+      ++current;
+    }
+
+    std::string request_token;
+    request_string >> request_token;
+
+    payload->_method = getMethodFromName( request_token );
+    if ( payload->_method == Payload::Response )
+    {
+      // request_token contains the version
+      payload->_version = request_token;
+
+      int response_code;
+      request_string >> response_code;
+      payload->_response = (Payload::ResponseType)response_code;
+    }
+    else
+    {
+      request_string >> payload->_request;
+      request_string >> payload->_version;
+    }
+
+
+//////////////////// // Load the Header
+    while ( current )
+    {
+      bool key = true;
+      while ( current )
+      {
+        if ( *current == (char)13 )
+        {
+          ++current;
+          if ( current && *current == (char)10 )
+          {
+            payload->addHeader( key_string, value_string );
+            key_string.clear();
+            value_string.clear();
+            ++current;
+            break;
+          }
+          else
+          {
+            delete payload;
+            payload = nullptr;
+            this->pushError( ErrorMalformedPayload );
+            return;
+          }
+        }
+        else
+        {
+          if ( key )
+          {
+            if ( *current == ':' )
+            {
+              ++current; // Expect a space
+              if ( ! current )
+              {
+                delete payload;
+                payload = nullptr;
+                this->pushError( ErrorMalformedPayload );
+                return;
+              }
+              key = false;
+            }
+            else
+            {
+              key_string.push_back( *current );
+            }
+          }
+          else
+            value_string.push_back( *current );
+        }
+        ++current;
+      }
+
+      if ( *current == (char)13 )
+      {
+        ++current;
+        if ( current && *current == (char)10 )
+        {
+          ++current;
+          break;
+        }
+        else
+        {
+          delete payload;
+          payload = nullptr;
+          this->pushError( ErrorMalformedPayload );
+          return;
+        }
+      }
+    }
+
+//////////////////// // Load the Body
+    while ( current )
+    {
+      payload->_body.push_back( *current );
+      ++current;
+    }
+
+    Payload::HeaderData::iterator found = payload->_header.find( "Cookie" );
+    if ( found != payload->_header.end() )
+    {
+      payload->_cookie.decode( found->second );
+      payload->_header.erase( found );
+    }
+
+    this->pushPayload( payload );
+  }
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+  Payload::Payload() :
+    _method( Response ),
+    _request(),
+    _version(),
+    _response( Null ),
+    _header(),
+    _cookie( '=', ';' ),
+    _setCookie( '=', ';' ),
+    _isFile( false ),
+    _body()
+  {
+  }
+
+
+  Payload::Payload( ResponseType response, std::string bodyText ) :
+    _method( Response ),
+    _request(),
+    _version( VersionString ),
+    _response( response ),
+    _header(),
+    _cookie( '=', ';' ),
+    _setCookie( '=', ';' ),
+    _isFile( false ),
+    _body( bodyText )
+  {
+  }
+
+
+  void Payload::setHeader( std::string key, std::string value )
+  {
+    _header[key] = value;
+  }
+
+
+  void Payload::addHeader( std::string key, std::string value )
+  {
+    HeaderData::iterator found = _header.find( key );
+    if ( found != _header.end() )
+    {
+      found->second += ", ";
+      found->second += value;
+    }
+    else
+    {
+      _header[key] = value;
+    }
+  }
+
+
+  void Payload::addSetCookie( std::string name, std::string value )
+  {
+    _setCookie.setValue( name, value );
+  }
+
+
+  std::string Payload::getHeader( std::string key ) const
+  {
+    HeaderData::const_iterator found = _header.find( key );
+    if ( found == _header.end() )
+    {
+      return std::string("");
+    }
+    else
+    {
+      return found->second;
+    }
+  }
+
+
+  std::string Payload::getCookie( std::string name ) const
+  {
+    return _cookie.getValue( name );
+  }
+
+
+  std::string Payload::print() const
+  {
+    std::stringstream ss;
+    if ( _method == Response )
+    {
+      ss << _version << ' ' << getStringFromResponse( _response ) << '\n';
+    }
+    else
+    {
+      ss << MethodStrings[ _method ] << ' ' << _request << ' ' << VersionString << '\n';
+    }
+    for ( HeaderData::const_iterator it = _header.begin(); it != _header.end(); ++it )
+    {
+      ss << it->first << ": " << it->second << '\n';
+    }
+    if ( _cookie.size() )
+      ss << "Cookie: " << _cookie.encode() << '\n';
+    if ( _setCookie.size() )
+      ss << "Set-Cookie: " << _setCookie.encode() << '\n';
+    ss << '\n';
+    ss << _body;
+
+    return ss.str();
+  }
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+  // Helpful functions
+
+  Payload::MethodType getMethodFromName( std::string name  )
+  {
+    for ( size_t i = 0; i < 10; ++i )
+    {
+      if ( name == MethodStrings[i] )
+        return (Payload::MethodType)i;
+    }
+
+    return Payload::Response;
+  }
+
+
+  std::string getStringFromResponse( Payload::ResponseType response )
+  {
+    switch( response )
+    {
+      case Payload::Ok :
+        return std::string( "200 OK" );
+        break;
+
+      case Payload::Created :
+        return std::string( "201 Created" );
+        break;
+
+      case Payload::Accepted :
+        return std::string( "202 Accpeted" );
+        break;
+
+      case Payload::BadRequest :
+        return std::string( "400 Bad Request" );
+        break;
+
+      case Payload::Unauthorized :
+        return std::string( "401 Unauthorized" );
+        break;
+
+      case Payload::PaymentRequired :
+        return std::string( "402 Payment Required" );
+        break;
+
+      case Payload::Forbidden :
+        return std::string( "403 Forbidden" );
+        break;
+
+      case Payload::NotFound :
+        return std::string( "404 Not Found" );
+        break;
+
+      case Payload::MethodNotAllowed :
+        return std::string( "405 Method Not Allowed" );
+        break;
+
+      case Payload::InternalServerError :
+        return std::string( "500 Internal Server Error" );
+        break;
+
+      case Payload::NotImplemented :
+        return std::string( "501 Not Implemented" );
+        break;
+
+      case Payload::BadGateway :
+        return std::string( "502 Bad Gateway" );
+        break;
+
+      case Payload::ServiceUnavailable :
+        return std::string( "503 Service Unavailable" );
+        break;
+
+      case Payload::GatewayTimeout :
+        return std::string( "504 Gateway Timeout" );
+        break;
+
+      case Payload::HTTPVersionNotSupported :
+        return std::string( "505 HTTP Version Not Supported" );
+        break;
+
+      default :
+        return std::string( "500 Internal Server Error" );
+        break;
+    }
+//    return std::string( "200 OK" );
+  }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
   char lookupHex( char c )
   {

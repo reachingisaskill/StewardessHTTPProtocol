@@ -14,6 +14,68 @@ namespace HTTP
 
 
 ////////////////////////////////////////////////////////////////////////////////
+  // Tokeninzing class
+
+  class TokenDictionary
+  {
+    private:
+      typedef std::map< std::string, std::string > TokenMap;
+
+    public:
+      typedef TokenMap::iterator iterator;
+      typedef TokenMap::const_iterator const_iterator;
+
+    private:
+      // The delimeters
+      const char _delimKey;
+      const char _delimValue;
+
+      // Flag to omit trailing delimeter
+      bool _flagTrailingDelimeterRequired;
+
+      // The map of keys and values
+      TokenMap _dictionary;
+
+
+    public:
+      // Specify the delimiters to construct
+      TokenDictionary( char, char );
+
+      void setTrailingDelimeterRequired( bool v ) { _flagTrailingDelimeterRequired = v; }
+
+      // Build dictionary from string
+      void decode( const std::string& );
+
+      // Build dictionary from string between the suppled iterators
+      void decode( std::string::const_iterator&, std::string::const_iterator );
+
+      // Build a string from the dictionary
+      std::string encode() const;
+
+      // Set a value for a dictionary item
+      void setValue( std::string, std::string );
+
+      // Return a value for a specific key
+      std::string getValue( std::string ) const;
+
+      // Return true if the key exists
+      bool getExists( std::string ) const;
+
+      // Clear the dictionary
+      void clear() { _dictionary.clear(); }
+      
+      // Return the number of elements
+      size_t size() const { return _dictionary.size(); }
+
+      // Simple iterator interface
+      iterator begin() { return _dictionary.begin(); }
+      const_iterator begin() const { return _dictionary.begin(); }
+      iterator end() { return _dictionary.end(); }
+      const_iterator end() const { return _dictionary.end(); }
+  };
+
+
+////////////////////////////////////////////////////////////////////////////////
   // HTTP request object
   class Request
   {
@@ -118,6 +180,12 @@ namespace HTTP
       // The header data
       HeaderData _header;
 
+      // Store the cookie separately
+      TokenDictionary _cookie;
+
+      // Store the cookie separately
+      TokenDictionary _setCookie;
+
       // If true, load the body data from the file
       bool _isFile;
 
@@ -143,6 +211,9 @@ namespace HTTP
       // Adds a key-value pair in the header, appending values if it alredy exists
       void addHeader( std::string, std::string );
 
+      // Adds a cookie name and value to the Set-Cookie header
+      void addSetCookie( std::string, std::string );
+
 
       // Return the method of payload
       MethodType getMethod() const { return _method; }
@@ -152,6 +223,10 @@ namespace HTTP
 
       // Return a requested header value. Returns an empty string if it doesn't exist
       std::string getHeader( std::string ) const;
+
+      // Return a cookie value from the Cookie header
+      std::string getCookie( std::string ) const;
+
 
       // Return the literal body contents
       const std::string& getBody() const { return _body; }

@@ -21,11 +21,16 @@ namespace HTTP
     {
       Payload* payload = (Payload*)p;
       std::cout << "RECEIVED: From connection: " << handle.getConnectionID() << '\n' << payload->print() << std::endl;
-      delete p;
 
+      std::cout << "COOKIE = " << payload->getCookie( "hello" ) << std::endl;
       Payload response( Payload::Ok, HTMLHello );
+      if ( payload->getCookie( "hello" ).size() == 0 )
+      {
+        response.addSetCookie( "hello", "world" );
+      }
       std::cout << "RESPONSE: " << '\n' << response.print() << std::endl;
       handle.write( &response );
+      delete p;
     }
 
 

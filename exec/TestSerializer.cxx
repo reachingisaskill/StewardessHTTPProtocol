@@ -16,6 +16,7 @@ int main( int, char** )
     std::cout << "Creating test payload" << std::endl;
     Payload* test_payload = new Payload( Payload::Ok, "Hello" );
     test_payload->setHeader( "Host", "www.example.com" );
+    test_payload->addSetCookie( "name", "value" );
 
     std::cout << '\n' << test_payload->print() << '\n' << std::endl;
 
