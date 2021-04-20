@@ -198,7 +198,7 @@ namespace HTTP
       Payload();
 
       // Simple response constructor
-      Payload( ResponseType, std::string );
+      Payload( ResponseType, std::string = "" );
 
 
       // Set the flag to indicate it is a file type payload
@@ -227,6 +227,9 @@ namespace HTTP
       // Return a cookie value from the Cookie header
       std::string getCookie( std::string ) const;
 
+
+      // Set a new body string
+      void setBody( const std::string& b ) { _body = b; }
 
       // Return the literal body contents
       const std::string& getBody() const { return _body; }
