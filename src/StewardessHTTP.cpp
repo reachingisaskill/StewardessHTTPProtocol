@@ -609,6 +609,12 @@ namespace HTTP
 
   void Payload::setHeader( std::string key, std::string value )
   {
+    size_t pos = 0;
+    while ( ( pos = value.find( '\n', pos ), pos != std::string::npos ) )
+    {
+      value[pos] = ' ';
+    }
+
     _header[key] = value;
   }
 
